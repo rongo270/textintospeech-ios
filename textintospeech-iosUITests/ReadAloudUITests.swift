@@ -114,6 +114,36 @@ final class ReadAloudUITests: XCTestCase {
         XCTAssertTrue(second.isSelected, "tapped voice row was not selected")
     }
 
+    /// Hebrew has one system voice, so the picker offers derived shapes (Man, Man · Strong);
+    /// the chosen shape survives an app relaunch.
+    func testHebrewVoiceShapes() throws {
+        var app = launchApp()
+        app.buttons["Voice & sound"].tap()
+
+        // Switch the language dropdown to Hebrew.
+        let language = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Language'")).firstMatch
+        XCTAssertTrue(language.waitForExistence(timeout: 5), "language dropdown missing")
+        language.tap()
+        let hebrew = app.buttons["Hebrew"]
+        XCTAssertTrue(hebrew.waitForExistence(timeout: 3), "Hebrew not offered in the language menu")
+        hebrew.tap()
+
+        let strongMan = app.buttons["Man · Strong"]
+        XCTAssertTrue(strongMan.waitForExistence(timeout: 5), "derived Man · Strong shape missing for Hebrew")
+        XCTAssertTrue(app.buttons["Man"].exists, "derived Man shape missing for Hebrew")
+        strongMan.tap()
+        XCTAssertTrue(strongMan.isSelected, "tapping the Man · Strong shape did not select it")
+        attach(app, "hebrew-voice-shapes")
+
+        // The choice must survive a relaunch (voice persistence).
+        app.terminate()
+        app = launchApp()
+        app.buttons["Voice & sound"].tap()
+        let restored = app.buttons["Man · Strong"]
+        XCTAssertTrue(restored.waitForExistence(timeout: 5), "Hebrew list not restored after relaunch")
+        XCTAssertTrue(restored.isSelected, "selected voice shape was not remembered across launches")
+    }
+
     /// Hebrew text plays and switches to a Hebrew voice automatically (RTL support).
     func testHebrewReading() throws {
         let app = launchApp(env: ["UITEST_SET_TEXT": "שלום וברכה. זהו משפט ראשון בעברית.\nוזוהי שורה שנייה לבדיקת קריאה."])

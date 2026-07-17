@@ -293,9 +293,10 @@ struct VoiceSoundSheet: View {
     /// One selectable voice row: radio mark, friendly label, HD tag; tapping selects the voice
     /// and speaks a short sample (or switches the live reading to it).
     private func voiceRow(_ item: FriendlyVoice) -> some View {
-        let selected = speech.selectedVoice?.identifier == item.id
+        let selected = speech.selectedVoiceId.map { $0 == item.id }
+            ?? (speech.selectedVoice?.identifier == item.voice.identifier && item.presetSlug == nil)
         return Button {
-            speech.selectVoice(item.voice)
+            speech.selectVoice(item)
             speech.previewSelected()
         } label: {
             HStack(spacing: 12) {

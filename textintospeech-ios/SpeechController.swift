@@ -31,6 +31,11 @@ final class SpeechController: NSObject, ObservableObject {
     @Published private(set) var playback = Playback()
     @Published private(set) var voices: [AVSpeechSynthesisVoice] = []
     @Published private(set) var selectedVoice: AVSpeechSynthesisVoice?
+    /// FriendlyVoice id of the selection - distinguishes shapes ("...#man") of the same voice.
+    @Published private(set) var selectedVoiceId: String?
+    /// Pitch/speed multipliers of the selected voice shape (1 = the voice as shipped).
+    private(set) var voicePitchShift: Float = 1
+    private(set) var voiceRateShift: Float = 1
 
     /// Emits the source id of a reading that finished on its own (used to auto-advance chapters/pages).
     let completed = PassthroughSubject<String?, Never>()
@@ -61,10 +66,11 @@ final class SpeechController: NSObject, ObservableObject {
         synth.delegate = self
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
 
+        // Read the saved choice *before* refreshVoices - its fallback pick writes the same key.
+        let saved = defaults.string(forKey: "voice")
         refreshVoices()
-        if let saved = defaults.string(forKey: "voice"),
-           let match = voices.first(where: { $0.identifier == saved }) {
-            selectedVoice = match
+        if let saved, let item = resolveVoiceId(saved) {
+            selectVoice(item)
         }
         playback.state = .ready
 
@@ -106,8 +112,14 @@ final class SpeechController: NSObject, ObservableObject {
             if selected == nil || !installed.contains(where: { $0.identifier == selected?.identifier }) {
                 let preferred = Locale.preferredLanguages.first ?? "en"
                 let candidates = installed.filter { Self.sameLanguage($0.language, preferred) }
-                let pick = VoiceCatalog.friendlyList(for: candidates).first?.voice ?? installed.first
-                if let pick { selectVoice(pick) } else { selectedVoice = nil }
+                if let pick = VoiceCatalog.friendlyList(for: candidates).first {
+                    selectVoice(pick)
+                } else if let any = installed.first {
+                    selectVoice(any)
+                } else {
+                    selectedVoice = nil
+                    selectedVoiceId = nil
+                }
             }
         }
         let noVoicesMsg = "No voices are installed. Add one in Settings → Accessibility → Spoken Content → Voices."
@@ -123,20 +135,51 @@ final class SpeechController: NSObject, ObservableObject {
         voices.contains { Self.sameLanguage($0.language, lang) }
     }
 
-    func selectVoice(_ voice: AVSpeechSynthesisVoice) {
-        selectedVoice = voice
-        defaults.set(voice.identifier, forKey: "voice")
+    /// Selects a voice entry, including derived shapes (a pitch-shifted "Man" of a single-voice
+    /// language). Remembered globally and per language, so switching languages and back keeps
+    /// the chosen shape.
+    func selectVoice(_ item: FriendlyVoice) {
+        selectedVoice = item.voice
+        selectedVoiceId = item.id
+        voicePitchShift = item.pitchShift
+        voiceRateShift = item.rateShift
+        defaults.set(item.id, forKey: "voice")
+        defaults.set(item.id, forKey: Self.langVoiceKey(item.voice.language))
         if playback.state == .speaking { restartCurrentChunk() }
     }
 
+    func selectVoice(_ voice: AVSpeechSynthesisVoice) {
+        selectVoice(FriendlyVoice(voice: voice, label: voice.name))
+    }
+
     /// Switches to a voice matching `lang` (BCP-47); returns it, or nil when none is installed.
+    /// Prefers the shape the user last chose for that language.
     @discardableResult
     func selectVoiceForLanguage(_ lang: String) -> AVSpeechSynthesisVoice? {
         if let current = selectedVoice, Self.sameLanguage(current.language, lang) { return current }
+        if let savedId = defaults.string(forKey: Self.langVoiceKey(lang)),
+           let item = resolveVoiceId(savedId), Self.sameLanguage(item.voice.language, lang) {
+            selectVoice(item)
+            return item.voice
+        }
         let candidates = voices.filter { Self.sameLanguage($0.language, lang) }
-        guard let match = VoiceCatalog.friendlyList(for: candidates).first?.voice else { return nil }
+        guard let match = VoiceCatalog.friendlyList(for: candidates).first else { return nil }
         selectVoice(match)
-        return match
+        return match.voice
+    }
+
+    /// Finds the FriendlyVoice for a stored id ("<identifier>" or "<identifier>#<shape>").
+    private func resolveVoiceId(_ id: String) -> FriendlyVoice? {
+        let voiceId = id.split(separator: "#").first.map(String.init) ?? id
+        guard let voice = voices.first(where: { $0.identifier == voiceId }) else { return nil }
+        let group = voices.filter { Self.sameLanguage($0.language, voice.language) }
+        let list = VoiceCatalog.friendlyList(for: group)
+        return list.first { $0.id == id } ?? list.first { $0.voice.identifier == voiceId }
+    }
+
+    private nonisolated static func langVoiceKey(_ tag: String) -> String {
+        let code = tag.split(separator: "-").first.map(String.init) ?? tag
+        return "voice.\(code.lowercased())"
     }
 
     func setRate(_ v: Float) { rate = v; defaults.set(v, forKey: "rate") }
@@ -299,10 +342,11 @@ final class SpeechController: NSObject, ObservableObject {
 
     private func apply(to utterance: AVSpeechUtterance, voice: AVSpeechSynthesisVoice?) {
         if let voice { utterance.voice = voice }
-        // The user's x-multiplier maps around the platform default rate (0.5 on iOS).
-        let mapped = AVSpeechUtteranceDefaultSpeechRate * rate
+        // The user's x-multiplier maps around the platform default rate (0.5 on iOS); the
+        // selected voice shape ("Man", "Man · Strong") layers its own pitch/speed on top.
+        let mapped = AVSpeechUtteranceDefaultSpeechRate * rate * voiceRateShift
         utterance.rate = min(max(mapped, AVSpeechUtteranceMinimumSpeechRate), AVSpeechUtteranceMaximumSpeechRate)
-        utterance.pitchMultiplier = min(max(pitch, 0.5), 2.0)
+        utterance.pitchMultiplier = min(max(pitch * voicePitchShift, 0.5), 2.0)
         utterance.volume = min(max(volume, 0), 1)
     }
 

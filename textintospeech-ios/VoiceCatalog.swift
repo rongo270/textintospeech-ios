@@ -2,13 +2,21 @@ import AVFoundation
 import Foundation
 
 /// A voice with a friendly, no-real-names label like "Woman · Soft" or "Man · Strong (British)".
+/// Some entries are derived "shapes" of a real voice (pitch/speed shifted), so languages with a
+/// single system voice - like Hebrew - still offer a man's or a deeper voice.
 struct FriendlyVoice: Identifiable, Equatable {
     let voice: AVSpeechSynthesisVoice
-    let label: String
-    var id: String { voice.identifier }
+    var label: String
+    /// Multipliers baked into this entry; 1 means the voice as Apple ships it.
+    var pitchShift: Float = 1
+    var rateShift: Float = 1
+    /// Set on derived shapes ("man", "deep", ...) so they get their own stable id.
+    var presetSlug: String? = nil
+
+    var id: String { presetSlug.map { "\(voice.identifier)#\($0)" } ?? voice.identifier }
 
     static func == (a: FriendlyVoice, b: FriendlyVoice) -> Bool {
-        a.voice.identifier == b.voice.identifier && a.label == b.label
+        a.id == b.id && a.label == b.label
     }
 }
 
@@ -146,15 +154,37 @@ enum VoiceCatalog {
             labels.append(label)
         }
 
+        var entries = zip(ranked, labels).map { FriendlyVoice(voice: $0, label: $1) }
+        entries += shapes(for: entries)
+
         // Same label twice → number them ("Woman · Soft 2").
         var seen: [String: Int] = [:]
-        for i in labels.indices {
-            let count = (seen[labels[i]] ?? 0) + 1
-            seen[labels[i]] = count
-            if count > 1 { labels[i] += " \(count)" }
+        for i in entries.indices {
+            let count = (seen[entries[i].label] ?? 0) + 1
+            seen[entries[i].label] = count
+            if count > 1 { entries[i].label += " \(count)" }
         }
+        return entries
+    }
 
-        return zip(ranked, labels).map { FriendlyVoice(voice: $0, label: $1) }
+    /// Derived voice shapes: when a language has no man's voice (Hebrew has only Carmit),
+    /// pitch-shifted versions of the best voice fill the gap. The shifts are tuned to stay
+    /// natural - deep enough to read as a man, never chipmunk or growl territory.
+    private static func shapes(for real: [FriendlyVoice]) -> [FriendlyVoice] {
+        guard let base = real.first else { return [] }
+        var out: [FriendlyVoice] = []
+        if real.count == 1 {
+            let soft = kind(of: base.voice) == .man ? "Man · Soft" : "Woman · Soft"
+            out.append(FriendlyVoice(voice: base.voice, label: soft,
+                                     pitchShift: 1.12, rateShift: 0.96, presetSlug: "soft"))
+        }
+        if !real.contains(where: { kind(of: $0.voice) == .man }) {
+            out.append(FriendlyVoice(voice: base.voice, label: "Man",
+                                     pitchShift: 0.7, rateShift: 1.0, presetSlug: "man"))
+            out.append(FriendlyVoice(voice: base.voice, label: "Man · Strong",
+                                     pitchShift: 0.58, rateShift: 0.95, presetSlug: "deep"))
+        }
+        return out
     }
 
     /// The short list for the picker: the best voices, always including both a woman's and a
