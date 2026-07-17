@@ -1,5 +1,9 @@
-# Xcode
-DerivedData/
-xcuserdata/
-*.xcuserstate
 .DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+Pods/
+.env
