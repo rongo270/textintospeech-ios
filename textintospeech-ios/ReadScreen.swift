@@ -13,7 +13,11 @@ struct ReadScreen: View {
     let onOpenSettings: () -> Void
     let onOpenPdf: () -> Void
 
+    /// Edit: normal typing. Read: typing off, tap a line to read from it.
+    private enum EditorMode { case edit, read }
+
     @State private var localText = ""
+    @State private var mode: EditorMode = .edit
     @State private var showVoiceSheet = false
     @State private var showFileImporter = false
     @State private var photoItem: PhotosPickerItem?
@@ -42,21 +46,24 @@ struct ReadScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            sourceButtons
-                .padding(.top, 6)
+            Group {
+                header
+                sourceButtons
+                    .padding(.top, 6)
 
-            if vm.photo != nil {
-                fullWidthButton("Open photo view", systemImage: "photo") { vm.requestPhotoReader() }
-                    .padding(.top, 10)
-            }
-            if vm.pdf != nil {
-                fullWidthButton("Read on the page", systemImage: "doc.richtext") { onOpenPdf() }
-                    .padding(.top, 10)
-            }
+                if vm.photo != nil {
+                    fullWidthButton("Open photo view", systemImage: "photo") { vm.requestPhotoReader() }
+                        .padding(.top, 10)
+                }
+                if vm.pdf != nil {
+                    fullWidthButton("Read on the page", systemImage: "doc.richtext") { onOpenPdf() }
+                        .padding(.top, 10)
+                }
 
-            editorCard
-                .padding(.top, 12)
+                editorCard
+                    .padding(.top, 12)
+            }
+            .frame(maxWidth: 700)   // keeps reading comfortable on iPad
 
             if !keyboardVisible {
                 PlayerBar(
@@ -78,7 +85,15 @@ struct ReadScreen: View {
         .padding(.horizontal, 12)
         .background(theme.surface.ignoresSafeArea())
         .onAppear { localText = vm.editorText }
-        .onChange(of: vm.doc.version) { _, _ in localText = vm.editorText }
+        .onChange(of: vm.doc.version) { _, _ in
+            localText = vm.editorText
+            if localText.isEmpty { mode = .edit }
+        }
+        // Pressing play flips the editor into Read mode, so a tap jumps the reading around
+        // instead of opening the keyboard.
+        .onChange(of: playback.state) { _, state in
+            if state == .speaking && ours { mode = .read }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(theme.eInk ? nil : .easeOut(duration: 0.2)) { keyboardVisible = true }
         }
@@ -227,17 +242,28 @@ struct ReadScreen: View {
         VStack(spacing: 0) {
             if !localText.isEmpty {
                 HStack(spacing: 6) {
+                    modeToggle
                     Spacer()
                     editorToolButton(systemImage: editorRtl ? "text.alignright" : "text.alignleft") {
                         vm.setReadingDirection(editorRtl ? .ltr : .rtl)
                     }
                     editorToolButton(systemImage: "xmark") {
                         localText = ""
+                        mode = .edit
                         vm.clear()
                     }
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
+
+                if mode == .read {
+                    Text("Tap any line to read from there")
+                        .font(.caption2)
+                        .foregroundStyle(theme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 17)
+                        .padding(.top, 6)
+                }
             }
             ZStack(alignment: .topLeading) {
                 HighlightTextEditor(
@@ -250,6 +276,10 @@ struct ReadScreen: View {
                     rtl: editorRtl,
                     textColor: UIColor(theme.onSurface),
                     followHighlight: speaking && ours,
+                    editable: mode == .edit,
+                    onTapLine: { offset in
+                        vm.readFrom(offset: offset, text: localText)
+                    },
                     onTextChanged: { text in
                         localText = text
                         vm.onEditorChanged(text)
@@ -267,6 +297,34 @@ struct ReadScreen: View {
         }
         .background(RoundedRectangle(cornerRadius: 24).fill(theme.surfaceContainerLow))
         .frame(maxHeight: .infinity)
+    }
+
+    /// The Edit / Read switch on the text card.
+    private var modeToggle: some View {
+        HStack(spacing: 2) {
+            modeChip("Edit", systemImage: "pencil", value: .edit)
+            modeChip("Read", systemImage: "headphones", value: .read)
+        }
+        .padding(2)
+        .background(Capsule().fill(theme.surfaceContainerHigh))
+    }
+
+    private func modeChip(_ label: String, systemImage: String, value: EditorMode) -> some View {
+        let selected = mode == value
+        return Button {
+            if value == .read { dismissKeyboard() }
+            mode = value
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage).font(.caption2)
+                Text(label).font(.footnote.weight(.medium))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(selected ? theme.secondaryContainer : Color.clear))
+            .foregroundStyle(selected ? theme.onSecondaryContainer : theme.onSurfaceVariant)
+        }
+        .buttonStyle(.plain)
     }
 
     private func editorToolButton(systemImage: String, action: @escaping () -> Void) -> some View {

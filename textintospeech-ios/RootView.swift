@@ -73,6 +73,22 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { speech.refreshVoices() }
         }
+        #if DEBUG
+        // Hooks for the UI tests: pre-load content without driving the system pickers.
+        .task {
+            let env = ProcessInfo.processInfo.environment
+            if env["UITEST_SKIP_WELCOME"] == "1" { settings.welcomeShown = true }
+            if let text = env["UITEST_SET_TEXT"] { readerVm.setSharedText(text) }
+            if let path = env["UITEST_OPEN_FILE"] {
+                readerVm.openDocument(pickedURL: URL(fileURLWithPath: path))
+            }
+            if let path = env["UITEST_OPEN_PHOTO"],
+               let image = UIImage(contentsOfFile: path),
+               let url = try? image.savedToCaches() {
+                readerVm.openPhoto(localURL: url)
+            }
+        }
+        #endif
     }
 
     private var preferredScheme: ColorScheme? {

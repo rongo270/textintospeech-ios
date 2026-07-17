@@ -84,12 +84,14 @@ final class SpeechController: NSObject, ObservableObject {
 
     /// Re-scans the installed voices. Called at init and every time the app comes back to the
     /// foreground, so voices the user just downloaded in the system settings appear immediately.
+    /// The same voice installed in several qualities is collapsed to its best copy.
     func refreshVoices() {
-        let installed = AVSpeechSynthesisVoice.speechVoices()
+        let usable = AVSpeechSynthesisVoice.speechVoices()
             .filter { voice in
                 let traits = voice.voiceTraits
                 return !traits.contains(.isNoveltyVoice) && !traits.contains(.isPersonalVoice)
             }
+        let installed = VoiceCatalog.dedupe(usable)
             .sorted { a, b in
                 let langA = Self.displayLanguage(a.language)
                 let langB = Self.displayLanguage(b.language)
@@ -103,7 +105,8 @@ final class SpeechController: NSObject, ObservableObject {
             let selected = selectedVoice
             if selected == nil || !installed.contains(where: { $0.identifier == selected?.identifier }) {
                 let preferred = Locale.preferredLanguages.first ?? "en"
-                let pick = installed.first { Self.sameLanguage($0.language, preferred) } ?? installed.first
+                let candidates = installed.filter { Self.sameLanguage($0.language, preferred) }
+                let pick = VoiceCatalog.friendlyList(for: candidates).first?.voice ?? installed.first
                 if let pick { selectVoice(pick) } else { selectedVoice = nil }
             }
         }
@@ -130,7 +133,8 @@ final class SpeechController: NSObject, ObservableObject {
     @discardableResult
     func selectVoiceForLanguage(_ lang: String) -> AVSpeechSynthesisVoice? {
         if let current = selectedVoice, Self.sameLanguage(current.language, lang) { return current }
-        guard let match = voices.first(where: { Self.sameLanguage($0.language, lang) }) else { return nil }
+        let candidates = voices.filter { Self.sameLanguage($0.language, lang) }
+        guard let match = VoiceCatalog.friendlyList(for: candidates).first?.voice else { return nil }
         selectVoice(match)
         return match
     }

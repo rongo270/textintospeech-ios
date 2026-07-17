@@ -12,6 +12,10 @@ struct HighlightTextEditor: UIViewRepresentable {
     let rtl: Bool
     let textColor: UIColor
     let followHighlight: Bool
+    /// Edit mode: normal typing. Read mode (`false`): typing is off and a tap reports the
+    /// UTF-16 offset of the tapped line, so reading can jump there.
+    var editable = true
+    var onTapLine: ((Int) -> Void)? = nil
     let onTextChanged: (String) -> Void
 
     func makeUIView(context: Context) -> UITextView {
@@ -22,12 +26,40 @@ struct HighlightTextEditor: UIViewRepresentable {
         tv.alwaysBounceVertical = true
         tv.keyboardDismissMode = .interactive
         tv.adjustsFontForContentSizeCategory = false
+        tv.accessibilityIdentifier = "mainEditor"
+
+        // A "keyboard down" button above the keyboard, so it can always be closed.
+        let doneItem = UIBarButtonItem(
+            image: UIImage(systemName: "keyboard.chevron.compact.down"),
+            style: .done, target: tv, action: #selector(UIView.endEditing(_:))
+        )
+        doneItem.accessibilityLabel = "Hide keyboard"
+        let bar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 100, height: 44))
+        bar.items = [.flexibleSpace(), doneItem]
+        bar.sizeToFit()
+        tv.inputAccessoryView = bar
+
+        // Read mode: tapping a line jumps the reading there.
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.onTap(_:)))
+        tap.isEnabled = false
+        tv.addGestureRecognizer(tap)
+        context.coordinator.tapRecognizer = tap
         return tv
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
         let c = context.coordinator
         c.parent = self
+
+        if tv.isEditable != editable {
+            if !editable, tv.isFirstResponder { tv.resignFirstResponder() }
+            tv.isEditable = editable
+            tv.isSelectable = editable
+            // Flipping editability makes UIKit re-derive display attributes, which loses the
+            // writing direction on freshly typed text - force a full re-style.
+            c.styleKey = nil
+        }
+        c.tapRecognizer?.isEnabled = !editable && onTapLine != nil
 
         if c.appliedVersion != version {
             c.appliedVersion = version
@@ -95,6 +127,7 @@ struct HighlightTextEditor: UIViewRepresentable {
         var programmatic = false
         var styleKey: StyleKey?
         var lastHighlight: NSRange?
+        var tapRecognizer: UITapGestureRecognizer?
 
         init(_ parent: HighlightTextEditor) { self.parent = parent }
 
@@ -102,6 +135,20 @@ struct HighlightTextEditor: UIViewRepresentable {
             guard !programmatic else { return }
             lastHighlight = nil   // edits shift offsets; the app stops reading anyway
             parent.onTextChanged(textView.text)
+        }
+
+        @objc func onTap(_ gesture: UITapGestureRecognizer) {
+            guard let tv = gesture.view as? UITextView, tv.textStorage.length > 0 else { return }
+            var point = gesture.location(in: tv)
+            point.x -= tv.textContainerInset.left
+            point.y -= tv.textContainerInset.top
+            let lm = tv.layoutManager
+            let glyphIndex = lm.glyphIndex(for: point, in: tv.textContainer)
+            guard glyphIndex < lm.numberOfGlyphs else { return }
+            var lineGlyphRange = NSRange(location: 0, length: 0)
+            lm.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            let charRange = lm.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            parent.onTapLine?(charRange.location)
         }
     }
 }

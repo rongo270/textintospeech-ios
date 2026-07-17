@@ -35,6 +35,8 @@ struct PlayPauseButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityLabel(isSpeaking ? "Pause" : "Play")
+        .accessibilityIdentifier("playPause")
     }
 }
 
@@ -64,6 +66,7 @@ struct PlayerBar: View {
                     .foregroundStyle(theme.onSurfaceVariant)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("statusText")
                 Button(action: onOpenVoiceSound) {
                     HStack(spacing: 4) {
                         Image(systemName: "slider.horizontal.3").font(.footnote)
@@ -82,16 +85,21 @@ struct PlayerBar: View {
             HStack {
                 Spacer()
                 TransportButton(systemName: "stop.fill", enabled: active, action: onStop)
+                    .accessibilityLabel("Stop")
                 Spacer()
                 TransportButton(systemName: "backward.end.fill", enabled: active, action: onPrev)
+                    .accessibilityLabel("Previous sentence")
                 Spacer()
                 PlayPauseButton(isSpeaking: speaking, enabled: playable, onClick: onPlayPause)
                 Spacer()
                 TransportButton(systemName: "forward.end.fill", enabled: active, action: onNext)
+                    .accessibilityLabel("Next sentence")
                 Spacer()
             }
             .padding(.vertical, 4)
         }
+        .frame(maxWidth: 700)          // keeps the controls together on iPad
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 6)
@@ -136,6 +144,7 @@ struct VoiceSoundSheet: View {
     @State private var volume: Float = 0.9
     @State private var selectedLang: String = ""
     @State private var showVoiceHelp = false
+    @State private var showAllVoices = false
 
     var body: some View {
         ScrollView {
@@ -152,22 +161,6 @@ struct VoiceSoundSheet: View {
                 sectionLabel("Voice")
                 voicePicker
                     .padding(.top, 8)
-
-                if !speech.voices.isEmpty {
-                    Button {
-                        speech.previewSelected()
-                    } label: {
-                        Label("Hear this voice", systemImage: "play.fill")
-                            .font(.footnote.weight(.medium))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(Capsule().fill(theme.secondaryContainer))
-                            .foregroundStyle(theme.onSecondaryContainer)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(speech.selectedVoice == nil || isReading)
-                    .padding(.top, 14)
-                }
 
                 sectionLabel("Reading").padding(.top, 22)
                 Text("Direction")
@@ -198,7 +191,7 @@ struct VoiceSoundSheet: View {
                 Button {
                     showVoiceHelp = true
                 } label: {
-                    Label("Get more voices", systemImage: "gearshape")
+                    Label("Download new voices", systemImage: "arrow.down.circle")
                         .font(.footnote)
                 }
                 .padding(.top, 10)
@@ -214,10 +207,10 @@ struct VoiceSoundSheet: View {
             volume = speech.volume
             selectedLang = primaryLanguage(of: speech.selectedVoice) ?? languages.first ?? ""
         }
-        .alert("Get more voices", isPresented: $showVoiceHelp) {
+        .alert("Download new voices", isPresented: $showVoiceHelp) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Higher-quality voices can be downloaded in the iPhone Settings app:\n\nSettings → Accessibility → Spoken Content → Voices.\n\nAfter downloading, come back here and pull the voice list open again.")
+            Text("Higher-quality voices can be downloaded in the Settings app:\n\nSettings → Accessibility → Spoken Content → Voices.\n\nAfter downloading, come back here - the new voice appears automatically.")
         }
     }
 
@@ -243,25 +236,97 @@ struct VoiceSoundSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(theme.onSurfaceVariant)
         } else {
-            let voicesForLang = speech.voices.filter { primaryLanguage(of: $0) == selectedLang }
+            let allForLang = VoiceCatalog.friendlyList(
+                for: speech.voices.filter { primaryLanguage(of: $0) == selectedLang }
+            )
+            let main = VoiceCatalog.mainList(allForLang)
+            let shown = showAllVoices ? allForLang : main
             VStack(spacing: 10) {
                 if languages.count > 1 {
                     dropdownRow(label: "Language", selection: SpeechController.displayLanguage(selectedLang)) {
                         ForEach(languages, id: \.self) { lang in
-                            Button(SpeechController.displayLanguage(lang)) { selectedLang = lang }
+                            Button(SpeechController.displayLanguage(lang)) {
+                                selectedLang = lang
+                                showAllVoices = false
+                            }
                         }
                     }
                 }
-                dropdownRow(
-                    label: "Voice",
-                    selection: speech.selectedVoice.map(voiceLabel) ?? ""
-                ) {
-                    ForEach(voicesForLang, id: \.identifier) { voice in
-                        Button(voiceLabel(voice)) { speech.selectVoice(voice) }
+
+                VStack(spacing: 0) {
+                    ForEach(shown) { item in
+                        voiceRow(item)
+                        if item.id != shown.last?.id {
+                            Divider().padding(.leading, 48)
+                        }
                     }
                 }
+                .background(RoundedRectangle(cornerRadius: 12).fill(theme.surfaceContainerHigh))
+
+                if allForLang.count > main.count {
+                    Button {
+                        withAnimation(theme.eInk ? nil : .easeInOut(duration: 0.2)) {
+                            showAllVoices.toggle()
+                        }
+                    } label: {
+                        Label(
+                            showAllVoices ? "Show main voices" : "More voices (\(allForLang.count))",
+                            systemImage: showAllVoices ? "chevron.up" : "plus.circle"
+                        )
+                        .font(.footnote.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                        .background(Capsule().fill(theme.secondaryContainer))
+                        .foregroundStyle(theme.onSecondaryContainer)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("moreVoices")
+                }
+
+                Text("Tap a voice to hear it.")
+                    .font(.caption2)
+                    .foregroundStyle(theme.onSurfaceVariant)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    /// One selectable voice row: radio mark, friendly label, HD tag; tapping selects the voice
+    /// and speaks a short sample (or switches the live reading to it).
+    private func voiceRow(_ item: FriendlyVoice) -> some View {
+        let selected = speech.selectedVoice?.identifier == item.id
+        return Button {
+            speech.selectVoice(item.voice)
+            speech.previewSelected()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(selected ? theme.primary : theme.outline)
+                Text(item.label)
+                    .font(.body)
+                    .foregroundStyle(theme.onSurface)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if item.voice.quality != .default {
+                    Text("HD")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(theme.tertiary.opacity(0.15)))
+                        .foregroundStyle(theme.tertiary)
+                }
+                Image(systemName: "speaker.wave.2")
+                    .font(.caption)
+                    .foregroundStyle(theme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("voiceRow")
+        .accessibilityLabel(item.label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func dropdownRow<Content: View>(
@@ -298,15 +363,6 @@ struct VoiceSoundSheet: View {
         Text(text)
             .font(.footnote.weight(.semibold))
             .foregroundStyle(theme.onSurfaceVariant)
-    }
-}
-
-/// Distinct labels for the voice menu: the system's real voice name plus its quality tier.
-func voiceLabel(_ voice: AVSpeechSynthesisVoice) -> String {
-    switch voice.quality {
-    case .enhanced: return "\(voice.name) · Enhanced"
-    case .premium: return "\(voice.name) · Premium"
-    default: return voice.name
     }
 }
 

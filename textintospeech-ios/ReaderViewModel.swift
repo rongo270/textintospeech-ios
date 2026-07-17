@@ -8,9 +8,12 @@ import UIKit
 nonisolated func copyIntoCache(_ url: URL, subdirectory: String) throws -> URL {
     let scoped = url.startAccessingSecurityScopedResource()
     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(subdirectory, isDirectory: true)
+    // Each copy gets its own folder so the file keeps its original name (shown in titles).
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent(subdirectory, isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let target = dir.appendingPathComponent("\(UUID().uuidString)-\(url.lastPathComponent)")
+    let target = dir.appendingPathComponent(url.lastPathComponent)
     try FileManager.default.copyItem(at: url, to: target)
     return target
 }
@@ -243,6 +246,8 @@ final class ReaderViewModel: ObservableObject {
                 doc.status = "Nothing to read yet - open a file or type some text first."
             } else {
                 editorText = currentText
+                // Typed/pasted text also picks a voice matching its language (like files do).
+                _ = detectAndSwitchVoice(currentText)
                 speech.speak(currentText, source: Self.sourceRead)
             }
         default:
